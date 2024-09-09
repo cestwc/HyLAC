@@ -526,20 +526,18 @@ __launch_bounds__(BLOCK_DIM_X)
 {
   __shared__ SHARED_HANDLE sh;
   init(gh);
-  // printMatrix(gh.slack);000
-  calc_col_min(gh);
-  // printArray(gh.min_in_rows);
-  __syncthreads();
-  col_sub(gh);
-  __syncthreads();
-  // printMatrix(gh.slack);
   calc_row_min(gh);
   __syncthreads();
   row_sub(gh, sh);
   __syncthreads();
+  calc_col_min(gh);
+  __syncthreads();
+  col_sub(gh);
+  __syncthreads();
+
   compress_matrix(gh, sh);
   __syncthreads();
-  // checkpoint();
+
   do
   {
     __syncthreads();
@@ -551,7 +549,7 @@ __launch_bounds__(BLOCK_DIM_X)
     __syncthreads();
   } while (sh.repeat_kernel);
   __syncthreads();
-  // checkpoint();
+
   while (1)
   {
     __syncthreads();
@@ -563,7 +561,7 @@ __launch_bounds__(BLOCK_DIM_X)
       break;
     step_4_init(gh);
     __syncthreads();
-    // checkpoint();
+
     while (1)
     {
       __syncthreads();
@@ -582,10 +580,8 @@ __launch_bounds__(BLOCK_DIM_X)
       __syncthreads();
       if (sh.goto_5)
         break;
-      // checkpoint();
 
       __syncthreads();
-
       min_reduce_kernel1<data, n_threads_reduction>(gh.slack, gh.d_min_in_mat, SIZE * SIZE, gh);
       __syncthreads();
 
@@ -600,11 +596,12 @@ __launch_bounds__(BLOCK_DIM_X)
 
       step_6_init(gh, sh);
       __syncthreads();
+
       step_6_add_sub_fused_compress_matrix(gh, sh);
       __syncthreads();
     }
     __syncthreads();
-    // checkpoint();
+
     step_5a(gh);
     __syncthreads();
     step_5b(gh);
@@ -614,7 +611,7 @@ __launch_bounds__(BLOCK_DIM_X)
   get_objective(gh);
 }
 
-fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID)
+fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID = 0)
 {
 
   init(gh);
@@ -626,15 +623,9 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
   __syncthreads();
   col_sub(gh);
   __syncthreads();
-  // checkpoint();
 
-  // printArray(gh.min_in_rows, SIZE, "rowmin");
-  // printArray(gh.min_in_cols, SIZE, "colmin");
   compress_matrix(gh, sh);
   __syncthreads();
-
-  // printArray(gh.cover_row, "cover row");
-  // printArray(gh.cover_column, "cover column");
 
   do
   {
@@ -647,8 +638,6 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
     __syncthreads();
   } while (sh.repeat_kernel);
   __syncthreads();
-  // printArray(gh.row_of_star_at_column, "row of star at column");
-  // printArray(gh.column_of_star_at_row, "column of star at row");
 
   while (1)
   {
@@ -657,14 +646,10 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
     __syncthreads();
     step_3(gh, sh);
     __syncthreads();
-    // printArray(gh.cover_column);
-    // printArray(gh.cover_row);
     if (sh.n_matches >= SIZE)
       break;
     step_4_init(gh);
     __syncthreads();
-
-    // checkpoint();
 
     while (1)
     {
@@ -684,12 +669,11 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
       __syncthreads();
       if (sh.goto_5)
         break;
-      // checkpoint();
-      // printArray(&sh.zeros_size, 1, "zeros size:");
-      // printArray(gh.cover_row, SIZE, "row cover");
+
       __syncthreads();
       min_reduce_kernel1<data, n_threads_reduction>(gh.slack, gh.d_min_in_mat, SIZE * SIZE, gh);
       __syncthreads();
+
       if (gh.d_min_in_mat[0] <= 0)
       {
         __syncthreads();
@@ -697,20 +681,19 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
         {
 
           printf("minimum element in problemID %u is non positive: %f\n", problemID, (float)gh.d_min_in_mat[0]);
-          // printf("minimum element in problemID %u is non positive: %f\n", problemID, gh.d_min_in_mat[0]);
         }
         return;
       }
       __syncthreads();
+
       step_6_init(gh, sh); // Also does dual update
       __syncthreads();
-      // printArray(gh.d_min_in_mat, 1, "min ");
-      // printArray(gh.min_in_rows, SIZE, "row dual");
+
       step_6_add_sub_fused_compress_matrix(gh, sh);
       __syncthreads();
     }
     __syncthreads();
-    // checkpoint();
+
     step_5a(gh);
     __syncthreads();
     step_5b(gh);
