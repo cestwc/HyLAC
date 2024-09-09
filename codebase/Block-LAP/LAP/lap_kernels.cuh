@@ -519,7 +519,7 @@ fundef void set_handles(TILED_HANDLE<data> &th, GLOBAL_HANDLE<data> &gh, uint &p
   }
   __syncthreads();
 }
-#ifdef false
+
 template <typename data = int, uint BLOCK_DIM_X>
 __launch_bounds__(BLOCK_DIM_X)
     __global__ void BHA(GLOBAL_HANDLE<data> gh)
@@ -588,14 +588,16 @@ __launch_bounds__(BLOCK_DIM_X)
 
       min_reduce_kernel1<data, n_threads_reduction>(gh.slack, gh.d_min_in_mat, SIZE * SIZE, gh);
       __syncthreads();
+
       if (gh.d_min_in_mat[0] <= 0)
       {
         __syncthreads();
         if (threadIdx.x == 0)
-          printf("minimum element in block %u is non positive\n%d", blockIdx.x, gh.d_min_in_mat[0]);
+          printf("minimum element in block %u is non positive\n%f", blockIdx.x, gh.d_min_in_mat[0]);
         return;
       }
       __syncthreads();
+
       step_6_init(gh, sh);
       __syncthreads();
       step_6_add_sub_fused_compress_matrix(gh, sh);
@@ -608,8 +610,9 @@ __launch_bounds__(BLOCK_DIM_X)
     step_5b(gh);
     __syncthreads();
   }
+  __syncthreads();
+  get_objective(gh);
 }
-#endif
 
 fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID)
 {
@@ -713,6 +716,8 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
     step_5b(gh);
     __syncthreads();
   }
+  __syncthreads();
+  get_objective(gh);
 }
 
 fundef void get_objective(GLOBAL_HANDLE<data> &gh)
@@ -745,8 +750,6 @@ __global__ void THA(TILED_HANDLE<data> th)
       return;
     __syncthreads();
     BHA<data>(gh, sh, problemID);
-    __syncthreads();
-    get_objective<data>(gh);
 
     // if (threadIdx.x == 0)
     //   printf("Problem %u: %d done\n", problemID, gh.objective[0]);
