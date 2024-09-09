@@ -525,90 +525,7 @@ __launch_bounds__(BLOCK_DIM_X)
     __global__ void BHA(GLOBAL_HANDLE<data> gh)
 {
   __shared__ SHARED_HANDLE sh;
-  init(gh);
-  calc_row_min(gh);
-  __syncthreads();
-  row_sub(gh, sh);
-  __syncthreads();
-  calc_col_min(gh);
-  __syncthreads();
-  col_sub(gh);
-  __syncthreads();
-
-  compress_matrix(gh, sh);
-  __syncthreads();
-
-  do
-  {
-    __syncthreads();
-    if (threadIdx.x == 0)
-      sh.repeat_kernel = false;
-    __syncthreads();
-    uint temp_blockdim = (gh.nb4 > 1 || sh.zeros_size > max_threads_per_block) ? max_threads_per_block : sh.zeros_size;
-    step_2(gh, temp_blockdim, sh);
-    __syncthreads();
-  } while (sh.repeat_kernel);
-  __syncthreads();
-
-  while (1)
-  {
-    __syncthreads();
-    step_3_init(gh, sh);
-    __syncthreads();
-    step_3(gh, sh);
-    __syncthreads();
-    if (sh.n_matches >= SIZE)
-      break;
-    step_4_init(gh);
-    __syncthreads();
-
-    while (1)
-    {
-      __syncthreads();
-      do
-      {
-        if (threadIdx.x == 0)
-        {
-          sh.goto_5 = false;
-          sh.repeat_kernel = false;
-        }
-        __syncthreads();
-        uint temp_blockdim = (gh.nb4 > 1 || sh.zeros_size > max_threads_per_block) ? max_threads_per_block : sh.zeros_size;
-        step_4(gh, temp_blockdim, sh);
-        __syncthreads();
-      } while (sh.repeat_kernel && !sh.goto_5);
-      __syncthreads();
-      if (sh.goto_5)
-        break;
-
-      __syncthreads();
-      min_reduce_kernel1<data, n_threads_reduction>(gh.slack, gh.d_min_in_mat, SIZE * SIZE, gh);
-      __syncthreads();
-
-      if (gh.d_min_in_mat[0] <= 0)
-      {
-        __syncthreads();
-        if (threadIdx.x == 0)
-          printf("minimum element in block %u is non positive\n%f", blockIdx.x, gh.d_min_in_mat[0]);
-        return;
-      }
-      __syncthreads();
-
-      step_6_init(gh, sh);
-      __syncthreads();
-
-      step_6_add_sub_fused_compress_matrix(gh, sh);
-      __syncthreads();
-    }
-    __syncthreads();
-
-    step_5a(gh);
-    __syncthreads();
-    step_5b(gh);
-    __syncthreads();
-  }
-  __syncthreads();
-  get_objective(gh);
+  BHA(gh, sh);
 }
 
 fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID = 0)
@@ -733,9 +650,6 @@ __global__ void THA(TILED_HANDLE<data> th)
       return;
     __syncthreads();
     BHA<data>(gh, sh, problemID);
-
-    // if (threadIdx.x == 0)
-    //   printf("Problem %u: %d done\n", problemID, gh.objective[0]);
   }
   return;
 }
