@@ -1,7 +1,7 @@
 #pragma once
 
-#define __DEBUG__
-#define __DEBUG__D true
+// #define __DEBUG__
+#define __DEBUG__D false
 #define MAX_DATA INT_MAX
 #define eps 1e-6
 

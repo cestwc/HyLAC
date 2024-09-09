@@ -48,6 +48,7 @@ struct TILED_HANDLE
       CUDA_RUNTIME(cudaFree(min_in_rows));
       CUDA_RUNTIME(cudaFree(min_in_cols));
       CUDA_RUNTIME(cudaFree(row_of_star_at_column));
+      CUDA_RUNTIME(cudaFree(objective));
     }
     CUDA_RUNTIME(cudaFree(slack));
     CUDA_RUNTIME(cudaFree(zeros));
@@ -86,7 +87,7 @@ struct GLOBAL_HANDLE
 
   void clear()
   {
-    // CUDA_RUNTIME(cudaFree(cost));  //Already cleared to save memory
+    CUDA_RUNTIME(cudaFree(cost)); // Already cleared to save memory
     CUDA_RUNTIME(cudaFree(slack));
     CUDA_RUNTIME(cudaFree(min_in_rows));
     CUDA_RUNTIME(cudaFree(min_in_cols));
@@ -104,6 +105,7 @@ struct GLOBAL_HANDLE
     CUDA_RUNTIME(cudaFree(max_in_mat_col));
     CUDA_RUNTIME(cudaFree(d_min_in_mat_vect));
     CUDA_RUNTIME(cudaFree(d_min_in_mat));
+    CUDA_RUNTIME(cudaFree(objective));
   };
 };
 
@@ -120,9 +122,7 @@ void memstatus(const char *message)
   cuMemGetInfo(&f, &t);
   total = (t * 1.0) / (1024 * 1024);
   free = (f * 1.0) / (1024 * 1024);
-  // std::cout << "total memory: " << total << " free memory: " << free << std::endl;
-  std::cout << message << "--";
-  std::cout << "occupied memory: " << total - free << " MB" << std::endl;
+  Log(info, "%s occupied memory: %.1f MB", message, total - free);
 }
 
 struct CUDAContext

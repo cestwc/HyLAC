@@ -19,7 +19,7 @@ private:
 public:
   GLOBAL_HANDLE<data> gh;
   // constructor
-  BLAP(data *cost, size_t size, int dev = 0) : cost_(cost), dev_(dev), size_(size)
+  BLAP(data *cost, size_t size, int dev = 0) : cost_(cost), size_(size), dev_(dev)
   {
     h_nrows = size;
     h_ncols = size;
@@ -52,8 +52,9 @@ public:
     CUDA_RUNTIME(cudaMemcpyToSymbol(log2_data_block_size, &temp5, sizeof(log2_data_block_size)));
 
     // memory allocations
-    // CUDA_RUNTIME(cudaMalloc((void **)&gh.cost, size * size * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.cost, size * size * sizeof(data)));
     // memstatus("Post constant");
+    CUDA_RUNTIME(cudaMallocManaged((void **)&gh.objective, 1 * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.slack, size * size * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_rows, h_nrows * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_cols, h_ncols * sizeof(data)));
@@ -61,7 +62,7 @@ public:
     CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros, h_nrows * h_ncols * sizeof(size_t)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros_size_b, num_blocks_4 * sizeof(size_t)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.row_of_star_at_column, h_ncols * sizeof(int)));
-    CUDA_RUNTIME(cudaMallocManaged((void **)&gh.column_of_star_at_row, h_nrows * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.column_of_star_at_row, h_nrows * sizeof(int)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.cover_row, h_nrows * sizeof(int)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.cover_column, h_ncols * sizeof(int)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.column_of_prime_at_row, h_nrows * sizeof(int)));
@@ -73,7 +74,7 @@ public:
     CUDA_RUNTIME(cudaMalloc((void **)&gh.d_min_in_mat, 1 * sizeof(data)));
 
     CUDA_RUNTIME(cudaMemcpy(gh.slack, cost_, size * size * sizeof(data), cudaMemcpyDefault));
-    // CUDA_RUNTIME(cudaMemcpy(gh.cost, cost_, size * size * sizeof(data), cudaMemcpyDefault));
+    CUDA_RUNTIME(cudaMemcpy(gh.cost, cost_, size * size * sizeof(data), cudaMemcpyDefault));
 
     CUDA_RUNTIME(cudaDeviceSynchronize());
     // memstatus("Post all mallocs");
@@ -82,7 +83,7 @@ public:
   // destructor
   ~BLAP()
   {
-    // Log(critical, "Destructor called");
+    Log(debug, "Destructor called");
     gh.clear();
   };
   void solve()
@@ -92,18 +93,7 @@ public:
     const uint n_threads_full = (uint)min(size_ * size_, 512UL);
     const size_t n_blocks = (size_t)ceil((size_ * 1.0) / n_threads);
 
-    execKernel((BHA<data, n_threads>), nprob, n_threads, dev_, false, gh);
-
-    // find objective
-    double total_cost = 0;
-    for (uint r = 0; r < h_nrows; r++)
-    {
-      int c = gh.column_of_star_at_row[r];
-      if (c >= 0)
-        total_cost += cost_[c * h_nrows + r];
-      // printf("r = %d, c = %d\n", r, c);
-    }
-    printf("Total cost: \t %f \n", total_cost);
+    execKernel((BHA<data, n_threads>), nprob, n_threads, dev_, true, gh);
   };
 
   bool passes_sanity_test(data *d_min)
@@ -168,8 +158,8 @@ public:
     Log(debug, "nblocks: %d\n", nblocks);
     Timer t;
     execKernel((THA<data, nthr>), nblocks, nthr, dev_, true, th);
+    CUDA_RUNTIME(cudaDeviceSynchronize());
     auto time = t.elapsed();
-    Log(info, "kernel time %f s\n", time);
   }
 
   void solve(data *costs, int *row_ass, data *row_duals, data *col_duals, data *obj)
@@ -187,10 +177,8 @@ public:
     int nblocks = maxtile;
     CUDA_RUNTIME(cudaMemcpy(th.slack, th.cost, nprob_ * size_ * size_ * sizeof(data), cudaMemcpyDefault));
     Log(debug, "nblocks from external solve: %d\n", nblocks);
-    Timer t;
+
     execKernel((THA<data, nthr>), nblocks, nthr, dev_, true, th);
-    auto time = t.elapsed();
-    Log(info, "Solve time %f s\n", time);
   }
 
   void allocate(uint nproblem, size_t size, int dev)
@@ -220,7 +208,7 @@ public:
                                                   nthr, 0);
     max_active_blocks *= num_SMs;
     maxtile = min(nproblem, max_active_blocks);
-    Log(debug, "Grid dimension %d\n", maxtile);
+    Log(debug, "Grid dimension %d", maxtile);
     th.row_mask = (1 << temp2) - 1;
     Log(debug, "log2_n %d", temp2);
     Log(debug, "row mask: %d", th.row_mask);
@@ -258,7 +246,7 @@ public:
       CUDA_RUNTIME(cudaMalloc((void **)&th.min_in_rows, maxtile * h_nrows * sizeof(data)));
       CUDA_RUNTIME(cudaMalloc((void **)&th.min_in_cols, maxtile * h_ncols * sizeof(data)));
       CUDA_RUNTIME(cudaMalloc((void **)&th.row_of_star_at_column, maxtile * h_ncols * sizeof(int)));
-      CUDA_RUNTIME(cudaMalloc((void **)&th.objective, nproblem * 1 * sizeof(data)));
+      CUDA_RUNTIME(cudaMallocManaged((void **)&th.objective, nproblem * 1 * sizeof(data)));
     }
   }
 };

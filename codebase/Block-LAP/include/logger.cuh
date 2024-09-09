@@ -51,6 +51,8 @@ void Log(LogPriorityEnum l, const char *f, Args... args)
 
     if (NEWLINE)
       printf("\n");
+    else
+      printf(" ");
 
     printf("\033[0m");
   }
