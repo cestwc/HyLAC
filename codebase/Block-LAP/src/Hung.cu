@@ -21,7 +21,7 @@ int main(int argc, char **argv)
   int dev = config.deviceId;
   int nprob = config.tile;
 
-  typedef float data;
+  typedef uint data;
   double time;
   Timer t;
   data *tcosts = new data[nprob * user_n * user_n];
@@ -51,8 +51,10 @@ int main(int argc, char **argv)
   CUDA_RUNTIME(cudaDeviceSynchronize());
   time = t.elapsed();
   Log(info, "solve time %f s", time);
-  Log(info, "Objective value: %.3f\n", lap->gh.objective[0]);
+  Log(info, "Objective value: %.3f\n", (float)lap->gh.objective[0]);
   delete lap;
+  /*
+  // Try the tiled solve
   t.reset();
   TLAP<data> *tlap = new TLAP<data>((uint)nprob, d_tcosts, user_n, dev);
   time = t.elapsed();
@@ -61,10 +63,10 @@ int main(int argc, char **argv)
   tlap->solve();
   time = t.elapsed();
   Log(info, "solve time %f s", time);
-  Log(info, "Objective value: %.3f\n", tlap->th.objective[0]);
+  Log(info, "Objective value: %.3f\n", (float)tlap->th.objective[0]);
   delete tlap;
 
-  // Try the external solve
+  // Try the external tiled solve
   int *Drow_ass;
   data *Drow_duals, *Dcol_duals, *Dobj;
 
@@ -80,7 +82,7 @@ int main(int argc, char **argv)
   ext_tlap->solve(d_tcosts, Drow_ass, Drow_duals, Dcol_duals, Dobj);
   time = t.elapsed();
   Log(info, "solve time %f s", time);
-  Log(info, "Objective value: %.3f\n", Dobj[0]);
+  Log(info, "Objective value: %.3f\n", (float)Dobj[0]);
   delete ext_tlap;
   // printDebugMatrix<data>(d_tcosts, user_n, user_n, "cost matrix");
   // printDebugArray<data>(Drow_duals, user_n, "row duals");
@@ -93,4 +95,5 @@ int main(int argc, char **argv)
   CUDA_RUNTIME(cudaFree(Dobj));
 
   delete[] h_costs;
+  */
 }
