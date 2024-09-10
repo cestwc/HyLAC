@@ -90,7 +90,7 @@ public:
   {
     uint nprob = 1;
     const uint n_threads = 512UL;
-    const uint n_threads_full = (uint)min(size_ * size_, 512UL);
+    const uint n_threads_full = (uint)min(size_ * size_, (unsigned long)n_threads);
     const size_t n_blocks = (size_t)ceil((size_ * 1.0) / n_threads);
 
     execKernel((BHA<data, n_threads>), nprob, n_threads, dev_, true, gh);

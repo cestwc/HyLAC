@@ -115,6 +115,19 @@ struct SHARED_HANDLE
   bool goto_5, repeat_kernel;
 };
 
+template <int NPART = 1>
+struct BLOCK_HANDLE
+{
+  int zeros_size[NPART], n_matches[NPART];
+  bool goto_5[NPART], repeat_kernel[NPART];
+};
+
+struct WARP_HANDLE
+{
+  int &zeros_size, &n_matches;
+  bool &goto_5, &repeat_kernel;
+};
+
 void memstatus(const char *message)
 {
   size_t t, f;
