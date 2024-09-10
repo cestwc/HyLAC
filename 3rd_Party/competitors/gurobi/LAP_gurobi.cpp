@@ -5,9 +5,11 @@
 #include <chrono>
 #include <random>
 #include <stdlib.h>
+#include "include/config.h"
+#include "include/Timer.h"
+#include "include/cost_generator.h"
 
 using namespace std;
-using namespace chrono;
 
 double *read_normalcosts(double *C, int *Nad, const char *filepath)
 {
@@ -31,38 +33,21 @@ double *read_normalcosts(double *C, int *Nad, const char *filepath)
 
 int main(int argc, char **argv)
 {
+    Config config = parseArgs(argc, argv);
+    printf("\033[0m");
+    printf("Welcome ---------------------\n");
+    printConfig(config);
 
-    const int seed = 45345;
-    int N = atoi(argv[1]);
+    const int seed = config.seed;
+    int N = config.user_n;
 
     double range = strtod(argv[2], nullptr);
     int N2 = N * N;
-    // const char *filepath = argv[1];
-    // C = read_normalcosts(C, &N, filepath);
-    double *C = new double[N2];
-    range *= N;
 
-    default_random_engine generator(seed);
-    uniform_int_distribution<int> distribution(0, range - 1);
-
-    for (int i = 0; i < N; i++)
-    {
-        for (int k = 0; k < N; k++)
-        {
-            double gen = (double)distribution(generator);
-            // cout << gen << "\t";
-            C[N * i + k] = gen;
-        }
-        // cout << endl;
-    }
-    // for (int i = 0; i < N; i++)
-    // {
-    //     for (int k = 0; k < N; k++)
-    //     {
-    //         cout << C[N * i + k] << "\t";
-    //     }
-    //     cout << endl;
-    // }
+    typedef float data;
+    double time;
+    Timer t;
+    data *C = generate_cost<data>(config, seed);
 
     try
     {
@@ -75,7 +60,7 @@ int main(int argc, char **argv)
             {
 
                 // costx represents the coefficient of x variables in the objective function
-                double costx = C[N * i + k];
+                data costx = C[N * i + k];
                 stringstream s;
                 s << "X_" << i << "_" << k << endl;
                 x[N * i + k] = model.addVar(0.0, 1.0, costx, GRB_CONTINUOUS, s.str());
@@ -107,14 +92,12 @@ int main(int argc, char **argv)
             model.addConstr(lhs == 1, s.str());
         }
         model.update();
-        auto start = high_resolution_clock::now();
+        auto start = t.elapsed();
         model.optimize();
-        auto elapsed = high_resolution_clock::now() - start;
-
-        long long microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        auto elapsed = t.elapsed() - start;
 
         cout << "Objective: " << model.getObjective().getValue() << endl;
-        cout << "Time: " << microseconds / 1000.0f << " ms" << endl;
+        cout << "Time: " << elapsed << " s" << endl;
     }
     catch (GRBException e)
     {
