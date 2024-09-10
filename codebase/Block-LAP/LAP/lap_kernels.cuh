@@ -6,6 +6,8 @@
 #define fundef template <typename data = int> \
 __device__ __forceinline__
 
+const uint nthr = 512;
+
 __constant__ size_t SIZE;
 __constant__ uint NPROB;
 __constant__ size_t nrows;
@@ -19,8 +21,8 @@ __constant__ uint log2_n, log2_data_block_size, data_block_size;
 __constant__ uint n_blocks_step_4;
 
 const int max_threads_per_block = 1024;
-const int columns_per_block_step_4 = 512;
-const int n_threads_reduction = 512;
+const int columns_per_block_step_4 = 1024;
+const int n_threads_reduction = nthr;
 
 fundef void init(GLOBAL_HANDLE<data> &gh) // with single block
 {

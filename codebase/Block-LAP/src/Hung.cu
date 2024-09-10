@@ -20,11 +20,11 @@ int main(int argc, char **argv)
   int user_n = config.user_n;
   int dev = config.deviceId;
   int nprob = config.tile;
-  if (user_n > 512)
-  {
-    Log(critical, "implementation not ready yet, exiting...");
-    exit(-1);
-  }
+  // if (user_n > 512)
+  // {
+  //   Log(critical, "implementation not ready yet, exiting...");
+  //   exit(-1);
+  // }
 
   typedef float data;
   double time;
