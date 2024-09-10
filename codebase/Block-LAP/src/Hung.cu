@@ -20,13 +20,12 @@ int main(int argc, char **argv)
   int user_n = config.user_n;
   int dev = config.deviceId;
   int nprob = config.tile;
-  if (user_n > 512)
-  {
-    Log(critical, "implementation not ready yet, exiting...");
-    exit(-1);
-  }
-  // typedef unsigned long data;
-  // typedef double data;
+  // if (user_n > 512)
+  // {
+  //   Log(critical, "implementation not ready yet, exiting...");
+  //   exit(-1);
+  // }
+
   typedef float data;
   double time;
   Timer t;
@@ -57,7 +56,7 @@ int main(int argc, char **argv)
   CUDA_RUNTIME(cudaDeviceSynchronize());
   time = t.elapsed();
   Log(info, "solve time %f s", time);
-  Log(info, "Objective value: %.3f", lap->gh.objective[0]);
+  Log(info, "Objective value: %.3f\n", lap->gh.objective[0]);
   delete lap;
   t.reset();
   TLAP<data> *tlap = new TLAP<data>((uint)nprob, d_tcosts, user_n, dev);
@@ -67,7 +66,7 @@ int main(int argc, char **argv)
   tlap->solve();
   time = t.elapsed();
   Log(info, "solve time %f s", time);
-  Log(info, "Objective value: %.3f", tlap->th.objective[0]);
+  Log(info, "Objective value: %.3f\n", tlap->th.objective[0]);
   delete tlap;
 
   // Try the external solve
@@ -86,7 +85,7 @@ int main(int argc, char **argv)
   ext_tlap->solve(d_tcosts, Drow_ass, Drow_duals, Dcol_duals, Dobj);
   time = t.elapsed();
   Log(info, "solve time %f s", time);
-  Log(info, "Objective value: %.3f", Dobj[0]);
+  Log(info, "Objective value: %.3f\n", Dobj[0]);
   delete ext_tlap;
   // printDebugMatrix<data>(d_tcosts, user_n, user_n, "cost matrix");
   // printDebugArray<data>(Drow_duals, user_n, "row duals");

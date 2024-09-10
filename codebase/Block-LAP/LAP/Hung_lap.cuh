@@ -4,7 +4,6 @@
 #include "lap_kernels.cuh"
 #include <thrust/reduce.h>
 #include <thrust/execution_policy.h>
-const uint nthr = 512;
 
 template <typename data>
 class BLAP
@@ -31,7 +30,7 @@ public:
     CUDA_RUNTIME(cudaMemcpyToSymbol(nrows, &h_nrows, sizeof(SIZE)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(ncols, &h_ncols, sizeof(SIZE)));
     num_blocks_4 = max((uint)ceil((size * 1.0) / columns_per_block_step_4), 1);
-    num_blocks_reduction = min(size, 512UL);
+    num_blocks_reduction = min(size, (size_t)nthr);
     CUDA_RUNTIME(cudaMemcpyToSymbol(NB4, &num_blocks_4, sizeof(NB4)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(NBR, &num_blocks_reduction, sizeof(NBR)));
     const uint temp1 = ceil(size / num_blocks_reduction);
@@ -89,11 +88,10 @@ public:
   void solve()
   {
     uint nprob = 1;
-    const uint n_threads = 512UL;
-    const uint n_threads_full = (uint)min(size_ * size_, 512UL);
-    const size_t n_blocks = (size_t)ceil((size_ * 1.0) / n_threads);
+    const uint n_threads_full = (uint)min(size_ * size_, (unsigned long)nthr);
+    const size_t n_blocks = (size_t)ceil((size_ * 1.0) / nthr);
 
-    execKernel((BHA<data, n_threads>), nprob, n_threads, dev_, true, gh);
+    execKernel((BHA<data, nthr>), nprob, nthr, dev_, true, gh);
   };
 
   bool passes_sanity_test(data *d_min)
@@ -191,7 +189,7 @@ public:
     CUDA_RUNTIME(cudaMemcpyToSymbol(nrows, &h_nrows, sizeof(SIZE)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(ncols, &h_ncols, sizeof(SIZE)));
     num_blocks_4 = max((uint)ceil((size * 1.0) / columns_per_block_step_4), 1);
-    num_blocks_reduction = min(size, 512UL);
+    num_blocks_reduction = min(size, (size_t)nthr);
     CUDA_RUNTIME(cudaMemcpyToSymbol(NB4, &num_blocks_4, sizeof(NB4)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(NBR, &num_blocks_reduction, sizeof(NBR)));
     const uint temp1 = ceil(size / num_blocks_reduction);
