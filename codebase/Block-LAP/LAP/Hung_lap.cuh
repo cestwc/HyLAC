@@ -29,26 +29,6 @@ public:
     // memstatus("First");
     CUDA_RUNTIME(cudaMemcpyToSymbol(nrows, &h_nrows, sizeof(SIZE)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(ncols, &h_ncols, sizeof(SIZE)));
-    num_blocks_4 = max((uint)ceil((size * 1.0) / columns_per_block_step_4), 1);
-    num_blocks_reduction = min(size, (size_t)nthr);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(NB4, &num_blocks_4, sizeof(NB4)));
-    CUDA_RUNTIME(cudaMemcpyToSymbol(NBR, &num_blocks_reduction, sizeof(NBR)));
-    const uint temp1 = ceil(size / num_blocks_reduction);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(n_rows_per_block, &temp1, sizeof(n_rows_per_block)));
-    CUDA_RUNTIME(cudaMemcpyToSymbol(n_cols_per_block, &temp1, sizeof(n_rows_per_block)));
-    const uint temp2 = (uint)ceil(log2(size_));
-    CUDA_RUNTIME(cudaMemcpyToSymbol(log2_n, &temp2, sizeof(log2_n)));
-    gh.row_mask = (1 << temp2) - 1;
-    Log(debug, "log2_n %d", temp2);
-    Log(debug, "row mask: %d", gh.row_mask);
-    gh.nb4 = max((uint)ceil((size * 1.0) / columns_per_block_step_4), 1);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(n_blocks_step_4, &gh.nb4, sizeof(n_blocks_step_4)));
-    const uint temp4 = columns_per_block_step_4 * pow(2, ceil(log2(size_)));
-    Log(debug, "dbs: %u", temp4);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(data_block_size, &temp4, sizeof(data_block_size)));
-    const uint temp5 = temp2 + (uint)ceil(log2(columns_per_block_step_4));
-    Log(debug, "l2dbs: %u", temp5);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(log2_data_block_size, &temp5, sizeof(log2_data_block_size)));
 
     // memory allocations
     CUDA_RUNTIME(cudaMalloc((void **)&gh.cost, size * size * sizeof(data)));
@@ -59,7 +39,6 @@ public:
     CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_cols, h_ncols * sizeof(data)));
 
     CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros, h_nrows * h_ncols * sizeof(size_t)));
-    CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros_size_b, num_blocks_4 * sizeof(size_t)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.row_of_star_at_column, h_ncols * sizeof(int)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.column_of_star_at_row, h_nrows * sizeof(int)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.cover_row, h_nrows * sizeof(int)));
@@ -69,7 +48,6 @@ public:
 
     CUDA_RUNTIME(cudaMalloc((void **)&gh.max_in_mat_row, h_nrows * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.max_in_mat_col, h_ncols * sizeof(data)));
-    CUDA_RUNTIME(cudaMalloc((void **)&gh.d_min_in_mat_vect, num_blocks_reduction * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.d_min_in_mat, 1 * sizeof(data)));
 
     CUDA_RUNTIME(cudaMemcpy(gh.slack, cost_, size * size * sizeof(data), cudaMemcpyDefault));
@@ -188,15 +166,7 @@ public:
     CUDA_RUNTIME(cudaMemcpyToSymbol(SIZE, &size, sizeof(SIZE)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(nrows, &h_nrows, sizeof(SIZE)));
     CUDA_RUNTIME(cudaMemcpyToSymbol(ncols, &h_ncols, sizeof(SIZE)));
-    num_blocks_4 = max((uint)ceil((size * 1.0) / columns_per_block_step_4), 1);
-    num_blocks_reduction = min(size, (size_t)nthr);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(NB4, &num_blocks_4, sizeof(NB4)));
-    CUDA_RUNTIME(cudaMemcpyToSymbol(NBR, &num_blocks_reduction, sizeof(NBR)));
-    const uint temp1 = ceil(size / num_blocks_reduction);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(n_rows_per_block, &temp1, sizeof(n_rows_per_block)));
-    CUDA_RUNTIME(cudaMemcpyToSymbol(n_cols_per_block, &temp1, sizeof(n_rows_per_block)));
-    const uint temp2 = (uint)ceil(log2(size_));
-    CUDA_RUNTIME(cudaMemcpyToSymbol(log2_n, &temp2, sizeof(log2_n)));
+
     int max_active_blocks = 1;
     CUDAContext context;
     int num_SMs = context.num_SMs;
@@ -207,24 +177,14 @@ public:
     max_active_blocks *= num_SMs;
     maxtile = min(nproblem, max_active_blocks);
     Log(debug, "Grid dimension %d", maxtile);
-    th.row_mask = (1 << temp2) - 1;
-    Log(debug, "log2_n %d", temp2);
-    Log(debug, "row mask: %d", th.row_mask);
-    th.nb4 = max((uint)ceil((size * 1.0) / columns_per_block_step_4), 1);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(n_blocks_step_4, &th.nb4, sizeof(n_blocks_step_4)));
-    const uint temp4 = columns_per_block_step_4 * pow(2, ceil(log2(size_)));
-    Log(debug, "dbs: %u", temp4);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(data_block_size, &temp4, sizeof(data_block_size)));
-    const uint temp5 = temp2 + (uint)ceil(log2(columns_per_block_step_4));
-    Log(debug, "l2dbs: %u", temp5);
-    CUDA_RUNTIME(cudaMemcpyToSymbol(log2_data_block_size, &temp5, sizeof(log2_data_block_size)));
+
     // external memory
     CUDA_RUNTIME(cudaMalloc((void **)&th.slack, nproblem * size * size * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&th.column_of_star_at_row, nproblem * h_nrows * sizeof(int)));
 
     // internal memory
     CUDA_RUNTIME(cudaMalloc((void **)&th.zeros, maxtile * h_nrows * h_ncols * sizeof(size_t)));
-    CUDA_RUNTIME(cudaMalloc((void **)&th.zeros_size_b, maxtile * num_blocks_4 * sizeof(size_t)));
+    CUDA_RUNTIME(cudaMemset(th.zeros, 0, maxtile * h_nrows * h_ncols * sizeof(size_t)));
 
     CUDA_RUNTIME(cudaMalloc((void **)&th.cover_row, maxtile * h_nrows * sizeof(int)));
     CUDA_RUNTIME(cudaMalloc((void **)&th.cover_column, maxtile * h_ncols * sizeof(int)));
@@ -233,7 +193,6 @@ public:
 
     CUDA_RUNTIME(cudaMalloc((void **)&th.max_in_mat_row, maxtile * h_nrows * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&th.max_in_mat_col, maxtile * h_ncols * sizeof(data)));
-    CUDA_RUNTIME(cudaMalloc((void **)&th.d_min_in_mat_vect, maxtile * num_blocks_reduction * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&th.d_min_in_mat, maxtile * 1 * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&th.tail, 1 * sizeof(uint)));
 

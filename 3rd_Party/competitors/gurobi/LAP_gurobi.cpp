@@ -44,7 +44,7 @@ int main(int argc, char **argv)
     double range = strtod(argv[2], nullptr);
     int N2 = N * N;
 
-    typedef float data;
+    typedef uint data;
     double time;
     Timer t;
     data *C = generate_cost<data>(config, seed);

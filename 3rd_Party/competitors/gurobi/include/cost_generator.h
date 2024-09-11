@@ -42,7 +42,7 @@ T *generate_cost(Config config, const int seed = 45345)
         if (c < user_n && r < user_n)
         {
           double gen;
-          if (typeid(T) == typeid(int))
+          if (typeid(T) == typeid(int) || typeid(T) == typeid(uint))
             gen = idistribution(generator);
           else
             gen = (T)rdistribution(generator);
