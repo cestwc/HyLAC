@@ -6,20 +6,14 @@
 #define fundef template <typename data = int> \
 __device__ __forceinline__
 
-const uint nthr = 8;
+const uint nthr = 256;
 
 __constant__ size_t SIZE;
 __constant__ uint NPROB;
 __constant__ size_t nrows;
 __constant__ size_t ncols;
 
-__constant__ uint NB4;
-__constant__ uint NBR;
-
-__constant__ uint n_blocks_step_4;
-
 const int max_threads_per_block = 1024;
-const int columns_per_block_step_4 = 8;
 const int n_threads_reduction = nthr;
 
 fundef void init(GLOBAL_HANDLE<data> &gh) // with single block
@@ -217,7 +211,7 @@ fundef void step_4_init(GLOBAL_HANDLE<data> &gh)
   }
 }
 
-fundef void step_4(GLOBAL_HANDLE<data> &gh, uint temp_blockdim, SHARED_HANDLE &sh)
+fundef void step_4(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh)
 {
   __shared__ bool s_found;
   __shared__ bool s_goto_5;
@@ -503,15 +497,12 @@ fundef void set_handles(TILED_HANDLE<data> &th, GLOBAL_HANDLE<data> &gh, uint &p
       // Internal memory
 
       gh.zeros = &th.zeros[b * nrows * ncols];
-      gh.zeros_size_b = &th.zeros_size_b[b * NB4];
-
       gh.cover_row = &th.cover_row[b * nrows];
       gh.cover_column = &th.cover_column[b * ncols];
       gh.column_of_prime_at_row = &th.column_of_prime_at_row[b * nrows];
       gh.row_of_green_at_column = &th.row_of_green_at_column[b * ncols];
       gh.max_in_mat_row = &th.max_in_mat_row[b * nrows];
       gh.max_in_mat_col = &th.max_in_mat_col[b * ncols];
-      gh.d_min_in_mat_vect = &th.d_min_in_mat_vect[b * NBR];
       gh.d_min_in_mat = &th.d_min_in_mat[b * 1];
     }
   }
@@ -574,8 +565,7 @@ fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID
           sh.repeat_kernel = false;
         }
         __syncthreads();
-        uint temp_blockdim = (gh.nb4 > 1 || sh.zeros_size > max_threads_per_block) ? max_threads_per_block : sh.zeros_size;
-        step_4(gh, temp_blockdim, sh);
+        step_4(gh, sh);
         __syncthreads();
       } while (sh.repeat_kernel && !sh.goto_5);
       __syncthreads();
