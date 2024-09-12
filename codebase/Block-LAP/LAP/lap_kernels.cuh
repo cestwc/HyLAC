@@ -176,22 +176,15 @@ fundef void step_3_init(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // For singl
 fundef void step_3(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // For single block
 {
   // size_t i = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  __shared__ int matches;
-  if (threadIdx.x == 0)
-    matches = 0;
-  __syncthreads();
   for (size_t i = threadIdx.x; i < nrows; i += blockDim.x)
   {
     // printf("i %lu, rosc %d\n", i, gh.row_of_star_at_column[i]);
     if (gh.row_of_star_at_column[i] >= 0)
     {
       gh.cover_column[i] = 1;
-      atomicAdd((int *)&matches, 1);
+      atomicAdd((int *)&sh.n_matches, 1);
     }
   }
-  __syncthreads();
-  if (threadIdx.x == 0)
-    atomicAdd((int *)&sh.n_matches, matches);
 }
 
 // STEP 4
