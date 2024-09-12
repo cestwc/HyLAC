@@ -253,15 +253,16 @@ fundef void step_4(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh)
 }
 
 template <typename data = int, uint blockSize = n_threads_reduction>
-__device__ void min_reduce_kernel1(volatile data *g_idata, volatile data *g_odata,
-                                   const size_t n, GLOBAL_HANDLE<data> &gh)
+__forceinline__ __device__ void min_reduce_kernel1(data *g_idata, data *g_odata,
+                                                   const size_t n, GLOBAL_HANDLE<data> &gh)
 {
-  __shared__ data sdata[blockSize];
+  // __shared__ data sdata[blockSize];
+  data myval = MAX_DATA;
   const uint tid = threadIdx.x;
   // size_t i = (size_t)blockIdx.x * ((size_t)blockSize * 2) + (size_t)tid;
   size_t i = tid;
   size_t gridSize = (size_t)blockSize * 2;
-  sdata[tid] = MAX_DATA;
+  // sdata[tid] = MAX_DATA;
   while (i < n)
   {
     size_t i1 = i;
@@ -282,14 +283,13 @@ __device__ void min_reduce_kernel1(volatile data *g_idata, volatile data *g_odat
       else
         g2 = g_idata[i2];
     }
-    sdata[tid] = min(sdata[tid], min(g1, g2));
+    myval = min(myval, min(g1, g2));
     i += gridSize;
   }
   __syncthreads();
   typedef cub::BlockReduce<data, blockSize> BlockReduce;
   __shared__ typename BlockReduce::TempStorage temp_storage;
-  data val = sdata[tid];
-  data minimum = BlockReduce(temp_storage).Reduce(val, cub::Min());
+  data minimum = BlockReduce(temp_storage).Reduce(myval, cub::Min());
   if (tid == 0)
     *g_odata = minimum;
 }
