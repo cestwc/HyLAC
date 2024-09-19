@@ -1,0 +1,209 @@
+#include "../include/defs.cuh"
+#include "../include/logger.cuh"
+#include "../include/Timer.h"
+#include "lap_kernels.cuh"
+#include <thrust/reduce.h>
+#include <thrust/execution_policy.h>
+
+template <typename data>
+class BLAP
+{
+private:
+  int dev_;
+  size_t size_, h_nrows, h_ncols;
+  data *cost_;
+
+  uint num_blocks_4, num_blocks_reduction;
+
+public:
+  GLOBAL_HANDLE<data> gh;
+  // constructor
+  BLAP(data *cost, size_t size, int dev = 0) : cost_(cost), size_(size), dev_(dev)
+  {
+    h_nrows = size;
+    h_ncols = size;
+
+    // constant memory copies
+    CUDA_RUNTIME(cudaSetDevice(dev_));
+    CUDA_RUNTIME(cudaMemcpyToSymbol(SIZE, &size, sizeof(SIZE)));
+    // memstatus("First");
+    CUDA_RUNTIME(cudaMemcpyToSymbol(nrows, &h_nrows, sizeof(SIZE)));
+    CUDA_RUNTIME(cudaMemcpyToSymbol(ncols, &h_ncols, sizeof(SIZE)));
+
+    // memory allocations
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.cost, size * size * sizeof(data)));
+    // memstatus("Post constant");
+    CUDA_RUNTIME(cudaMallocManaged((void **)&gh.objective, 1 * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.slack, size * size * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_rows, h_nrows * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_cols, h_ncols * sizeof(data)));
+
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros, h_nrows * h_ncols * sizeof(size_t)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.row_of_star_at_column, h_ncols * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.column_of_star_at_row, h_nrows * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.cover_row, h_nrows * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.cover_column, h_ncols * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.column_of_prime_at_row, h_nrows * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.row_of_green_at_column, h_ncols * sizeof(int)));
+
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.max_in_mat_row, h_nrows * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.max_in_mat_col, h_ncols * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&gh.d_min_in_mat, 1 * sizeof(data)));
+
+    CUDA_RUNTIME(cudaMemcpy(gh.slack, cost_, size * size * sizeof(data), cudaMemcpyDefault));
+    CUDA_RUNTIME(cudaMemcpy(gh.cost, cost_, size * size * sizeof(data), cudaMemcpyDefault));
+
+    CUDA_RUNTIME(cudaDeviceSynchronize());
+    // memstatus("Post all mallocs");
+  };
+
+  // destructor
+  ~BLAP()
+  {
+    Log(debug, "Destructor called");
+    gh.clear();
+  };
+  void solve()
+  {
+    uint nprob = 1;
+    const uint n_threads_full = (uint)min(size_ * size_, (unsigned long)nthr);
+    const size_t n_blocks = (size_t)ceil((size_ * 1.0) / nthr);
+
+    execKernel((BHA<data, nthr>), nprob, nthr, dev_, true, gh);
+  };
+
+  bool passes_sanity_test(data *d_min)
+  {
+    data temp;
+    CUDA_RUNTIME(cudaMemcpy(&temp, d_min, 1 * sizeof(data), cudaMemcpyDeviceToHost));
+    if (temp <= 0)
+    {
+      Log(critical, "minimum element in matrix is non positive => infinite loop condition !!!");
+      Log(critical, "%d", temp);
+      return false;
+    }
+    else
+      return true;
+  }
+};
+
+template <typename data>
+class TLAP
+{
+private:
+  uint nprob_;
+  int dev_, maxtile;
+  size_t size_, h_nrows, h_ncols;
+  data *Tcost_;
+  uint num_blocks_4, num_blocks_reduction;
+
+public:
+  // Blank constructor
+  TILED_HANDLE<data> th;
+  TLAP(uint nproblem, size_t size, int dev = 0)
+      : nprob_(nproblem), dev_(dev), size_(size)
+  {
+    th.memoryloc = EXTERNAL;
+    allocate(nproblem, size, dev);
+    CUDA_RUNTIME(cudaDeviceSynchronize());
+  }
+  TLAP(uint nproblem, data *tcost, size_t size, int dev = 0)
+      : nprob_(nproblem), Tcost_(tcost), dev_(dev), size_(size)
+  {
+    th.memoryloc = INTERNAL;
+    allocate(nproblem, size, dev);
+    th.cost = Tcost_;
+    // initialize slack
+    CUDA_RUNTIME(cudaMemcpy(th.slack, Tcost_, nproblem * size * size * sizeof(data), cudaMemcpyDefault));
+    CUDA_RUNTIME(cudaDeviceSynchronize());
+  };
+  // destructor
+  ~TLAP()
+  {
+    th.clear();
+  }
+
+  void solve()
+  {
+    if (th.memoryloc == EXTERNAL)
+    {
+      Log(critical, "Unassigned external memory, exiting...");
+      return;
+    }
+    int nblocks = maxtile;
+    Log(debug, "nblocks: %d\n", nblocks);
+    Timer t;
+    execKernel((THA<data, nthr>), nblocks, nthr, dev_, true, th);
+    CUDA_RUNTIME(cudaDeviceSynchronize());
+    auto time = t.elapsed();
+  }
+
+  void solve(data *costs, int *row_ass, data *row_duals, data *col_duals, data *obj)
+  {
+    if (th.memoryloc == INTERNAL)
+    {
+      Log(debug, "Doubly assigned external memory, exiting...");
+      return;
+    }
+    th.cost = costs;
+    th.row_of_star_at_column = row_ass;
+    th.min_in_rows = row_duals;
+    th.min_in_cols = col_duals;
+    th.objective = obj;
+    int nblocks = maxtile;
+    CUDA_RUNTIME(cudaMemcpy(th.slack, th.cost, nprob_ * size_ * size_ * sizeof(data), cudaMemcpyDefault));
+    Log(debug, "nblocks from external solve: %d\n", nblocks);
+
+    execKernel((THA<data, nthr>), nblocks, nthr, dev_, true, th);
+  }
+
+  void allocate(uint nproblem, size_t size, int dev)
+  {
+    h_nrows = size;
+    h_ncols = size;
+    CUDA_RUNTIME(cudaSetDevice(dev_));
+    CUDA_RUNTIME(cudaMemcpyToSymbol(NPROB, &nprob_, sizeof(NPROB)));
+    CUDA_RUNTIME(cudaMemcpyToSymbol(SIZE, &size, sizeof(SIZE)));
+    CUDA_RUNTIME(cudaMemcpyToSymbol(nrows, &h_nrows, sizeof(SIZE)));
+    CUDA_RUNTIME(cudaMemcpyToSymbol(ncols, &h_ncols, sizeof(SIZE)));
+
+    int max_active_blocks = 1;
+    CUDAContext context;
+    int num_SMs = context.num_SMs;
+
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_active_blocks,
+                                                  THA<data, nthr>,
+                                                  nthr, 0);
+    max_active_blocks *= num_SMs;
+    maxtile = min(nproblem, max_active_blocks);
+    Log(debug, "Grid dimension %d", maxtile);
+
+    // external memory
+    CUDA_RUNTIME(cudaMalloc((void **)&th.slack, nproblem * size * size * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.column_of_star_at_row, nproblem * h_nrows * sizeof(int)));
+
+    // internal memory
+    CUDA_RUNTIME(cudaMalloc((void **)&th.zeros, maxtile * h_nrows * h_ncols * sizeof(size_t)));
+    CUDA_RUNTIME(cudaMemset(th.zeros, 0, maxtile * h_nrows * h_ncols * sizeof(size_t)));
+
+    CUDA_RUNTIME(cudaMalloc((void **)&th.cover_row, maxtile * h_nrows * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.cover_column, maxtile * h_ncols * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.column_of_prime_at_row, maxtile * h_nrows * sizeof(int)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.row_of_green_at_column, maxtile * h_ncols * sizeof(int)));
+
+    CUDA_RUNTIME(cudaMalloc((void **)&th.max_in_mat_row, maxtile * h_nrows * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.max_in_mat_col, maxtile * h_ncols * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.d_min_in_mat, maxtile * 1 * sizeof(data)));
+    CUDA_RUNTIME(cudaMalloc((void **)&th.tail, 1 * sizeof(uint)));
+
+    CUDA_RUNTIME(cudaMemset(th.tail, 0, sizeof(uint)));
+    // CUDA_RUNTIME(cudaDeviceSynchronize());
+    if (th.memoryloc == INTERNAL)
+    {
+      CUDA_RUNTIME(cudaMalloc((void **)&th.min_in_rows, maxtile * h_nrows * sizeof(data)));
+      CUDA_RUNTIME(cudaMalloc((void **)&th.min_in_cols, maxtile * h_ncols * sizeof(data)));
+      CUDA_RUNTIME(cudaMalloc((void **)&th.row_of_star_at_column, maxtile * h_ncols * sizeof(int)));
+      CUDA_RUNTIME(cudaMallocManaged((void **)&th.objective, nproblem * 1 * sizeof(data)));
+    }
+  }
+};
