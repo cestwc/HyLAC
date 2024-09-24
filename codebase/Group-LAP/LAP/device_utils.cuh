@@ -103,6 +103,53 @@ struct GLOBAL_HANDLE
   };
 };
 
+template <typename data = int>
+struct PARTITION_HANDLE
+{
+  data *cost;
+  data *slack;
+  data *min_in_rows;
+  data *min_in_cols;
+  data *objective;
+
+  size_t *zeros;
+  int *row_of_star_at_column;
+  int *column_of_star_at_row; // In unified memory
+  int *cover_row, *cover_column;
+  int *column_of_prime_at_row, *row_of_green_at_column;
+  uint *tail;
+
+  // from shared handle
+  int zeros_size, n_matches;
+  bool goto_5, repeat_kernel;
+
+  // internal shared variables
+  bool s_found, repeat, s_repeat_kernel;
+
+  data *max_in_mat_row, *max_in_mat_col, *d_min_in_mat;
+  int row_mask;
+
+  void clear()
+  {
+    CUDA_RUNTIME(cudaFree(cost)); // Already cleared to save memory
+    CUDA_RUNTIME(cudaFree(slack));
+    CUDA_RUNTIME(cudaFree(min_in_rows));
+    CUDA_RUNTIME(cudaFree(min_in_cols));
+    CUDA_RUNTIME(cudaFree(row_of_star_at_column));
+    CUDA_RUNTIME(cudaFree(objective));
+    CUDA_RUNTIME(cudaFree(zeros));
+    CUDA_RUNTIME(cudaFree(column_of_star_at_row));
+    CUDA_RUNTIME(cudaFree(cover_row));
+    CUDA_RUNTIME(cudaFree(cover_column));
+    CUDA_RUNTIME(cudaFree(column_of_prime_at_row));
+    CUDA_RUNTIME(cudaFree(row_of_green_at_column));
+    CUDA_RUNTIME(cudaFree(max_in_mat_row));
+    CUDA_RUNTIME(cudaFree(max_in_mat_col));
+    CUDA_RUNTIME(cudaFree(d_min_in_mat));
+    CUDA_RUNTIME(cudaFree(tail));
+  };
+};
+
 struct SHARED_HANDLE
 {
   int zeros_size, n_matches;

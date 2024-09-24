@@ -1,12 +1,72 @@
 #pragma once
+#include <cooperative_groups.h>
 #include "../include/utils.cuh"
 #include "device_utils.cuh"
 #include "cub/cub.cuh"
 
+namespace cg = cooperative_groups;
+
 #define fundef template <typename data = int> \
 __device__ __forceinline__
 
-const uint nthr = 256;
+const uint nthr = 64;
+
+#define TileSize 64
+#define WARP_SIZE 32
+
+#if TileSize > WARP_SIZE
+template <typename Op>
+__device__ float warpReduce(cg::thread_block_tile<WARP_SIZE> tile, float value, Op operation)
+
+{
+  // Intra-tile reduction
+  for (int offset = tile.size() / 2; offset > 0; offset /= 2)
+  {
+    value = operation(value, tile.shfl_down(value, offset));
+  }
+  return value;
+}
+
+// Generalized tile-based reduction function
+template <typename Op>
+__device__ float tileReduce(cg::thread_block_tile<TileSize> tile, float value, Op operation)
+{
+  __shared__ float val[TileSize];
+  val[tile.thread_rank()] = value;
+  tile.sync();
+
+  cg::thread_block_tile<WARP_SIZE> subtile = cg::tiled_partition<WARP_SIZE>(tile);
+  __shared__ float red_val;
+  if (subtile.meta_group_rank() == 0)
+  {
+    for (uint i = WARP_SIZE + subtile.thread_rank(); i < TileSize; i += WARP_SIZE)
+      value = operation(value, val[i]);
+    subtile.sync();
+
+    value = warpReduce(subtile, value, operation);
+
+    subtile.sync();
+    if (subtile.thread_rank() == 0)
+    {
+      red_val = value;
+    }
+  }
+  tile.sync();
+  return red_val;
+}
+#else
+template <typename Op>
+__device__ float tileReduce(cg::thread_block_tile<TileSize> tile, float value, Op operation)
+
+{
+  // Intra-tile reduction
+  for (int offset = tile.size() / 2; offset > 0; offset /= 2)
+  {
+    value = operation(value, tile.shfl_down(value, offset));
+  }
+  return value;
+}
+#endif
 
 __constant__ size_t SIZE;
 __constant__ uint NPROB;
@@ -15,84 +75,82 @@ __constant__ size_t ncols;
 
 const int n_threads_reduction = nthr;
 
-fundef void init(GLOBAL_HANDLE<data> &gh) // with single block
+fundef void init(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // with single block
 {
   // initializations
   // for step 2
-  for (size_t i = threadIdx.x; i < SIZE; i += blockDim.x)
+
+  for (size_t i = tile.thread_rank(); i < SIZE; i += TileSize)
   {
-    gh.cover_row[i] = 0;
-    gh.column_of_star_at_row[i] = -1;
-    gh.cover_column[i] = 0;
-    gh.row_of_star_at_column[i] = -1;
+    ph.cover_row[i] = 0;
+    ph.column_of_star_at_row[i] = -1;
+    ph.cover_column[i] = 0;
+    ph.row_of_star_at_column[i] = -1;
   }
 }
 
-fundef void calc_col_min(GLOBAL_HANDLE<data> &gh) // with single block
+fundef void calc_col_min(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // with single block
 {
   for (size_t col = 0; col < SIZE; col++)
   {
-    size_t i = (size_t)threadIdx.x * SIZE + col;
+    size_t i = (size_t)tile.thread_rank() * SIZE + col;
     data thread_min = (data)MAX_DATA;
 
     while (i <= SIZE * (SIZE - 1) + col)
     {
-      thread_min = min(thread_min, gh.slack[i]);
-      i += (size_t)blockDim.x * SIZE;
+      thread_min = min(thread_min, ph.slack[i]);
+      i += (size_t)TileSize * SIZE;
     }
-    __syncthreads();
-    typedef cub::BlockReduce<data, n_threads_reduction> BR;
-    __shared__ typename BR::TempStorage temp_storage;
-    thread_min = BR(temp_storage).Reduce(thread_min, cub::Min());
-    if (threadIdx.x == 0)
+    tile.sync();
+
+    thread_min = tileReduce(tile, thread_min, cub::Min());
+    if (tile.thread_rank() == 0)
     {
-      gh.min_in_cols[col] = thread_min;
+      ph.min_in_cols[col] = thread_min;
     }
-    __syncthreads();
+    tile.sync();
   }
 }
 
-fundef void col_sub(GLOBAL_HANDLE<data> &gh) // with single block
+fundef void col_sub(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // with single block
 {
   // uint i = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  for (size_t i = threadIdx.x; i < SIZE * SIZE; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < SIZE * SIZE; i += TileSize)
   {
     size_t l = i % SIZE;
-    gh.slack[i] = gh.slack[i] - gh.min_in_cols[l]; // subtract the minimum in col from that col
+    ph.slack[i] = ph.slack[i] - ph.min_in_cols[l]; // subtract the minimum in col from that col
   }
 }
 
-fundef void calc_row_min(GLOBAL_HANDLE<data> &gh) // with single block
+fundef void calc_row_min(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // with single block
 {
 
-  typedef cub::BlockReduce<data, n_threads_reduction> BR;
-  __shared__ typename BR::TempStorage temp_storage;
   // size_t i = (size_t)blockIdx.x * SIZE + (size_t)threadIdx.x;
   for (size_t row = 0; row < SIZE; row++)
   {
     data thread_min = MAX_DATA;
-    for (size_t i = threadIdx.x + row * SIZE; i < SIZE * (row + 1); i += blockDim.x)
+    for (size_t i = tile.thread_rank() + row * SIZE; i < SIZE * (row + 1); i += TileSize)
     {
-      thread_min = min(thread_min, gh.slack[i]);
+      thread_min = min(thread_min, ph.slack[i]);
     }
-    __syncthreads();
-    thread_min = BR(temp_storage).Reduce(thread_min, cub::Min());
+    tile.sync();
+    thread_min = tileReduce(tile, thread_min, cub::Min());
     if (threadIdx.x == 0)
     {
-      gh.min_in_rows[row] = thread_min;
+      ph.min_in_rows[row] = thread_min;
     }
-    __syncthreads();
+    tile.sync();
   }
 }
 
-fundef void row_sub(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // with single block
+fundef void row_sub(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // with single block
 {
-  for (size_t i = threadIdx.x; i < SIZE * SIZE; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < SIZE * SIZE; i += TileSize)
   {
     size_t c = i / SIZE;
-    gh.slack[i] = gh.slack[i] - gh.min_in_rows[c]; // subtract the minimum in row from that row
+    ph.slack[i] = ph.slack[i] - ph.min_in_rows[c]; // subtract the minimum in row from that row
     if (i == 0)
-      sh.zeros_size = 0;
+      ph.zeros_size = 0;
   }
 }
 
@@ -101,87 +159,86 @@ fundef bool near_zero(data val)
   return ((val < eps) && (val > -eps));
 }
 
-fundef void compress_matrix(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // with single block
+fundef void compress_matrix(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // with single block
 {
   // size_t i = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  for (size_t i = threadIdx.x; i < SIZE * SIZE; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < SIZE * SIZE; i += TileSize)
   {
-    if (near_zero(gh.slack[i]))
+    if (near_zero(ph.slack[i]))
     {
-      size_t j = (size_t)atomicAdd(&sh.zeros_size, 1);
-      gh.zeros[j] = i; // saves index of zeros in slack matrix per block
+      size_t j = (size_t)atomicAdd(&ph.zeros_size, 1);
+      ph.zeros[j] = i; // saves index of zeros in slack matrix per block
     }
   }
 }
 
-fundef void step_2(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh)
+fundef void step_2(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
-  uint i = threadIdx.x;
-  __shared__ bool repeat;
-  __shared__ bool s_repeat_kernel;
+  uint i = tile.thread_rank();
+
   if (i == 0)
-    s_repeat_kernel = false;
+    ph.s_repeat_kernel = false;
 
   do
   {
-    __syncthreads();
+    tile.sync();
     if (i == 0)
-      repeat = false;
-    __syncthreads();
+      ph.repeat = false;
+    tile.sync();
 
-    for (int j = i; j < sh.zeros_size; j += blockDim.x)
+    for (int j = i; j < ph.zeros_size; j += TileSize)
     {
-      uint z = gh.zeros[j];
+      uint z = ph.zeros[j];
       uint l = z % nrows;
       uint c = z / nrows;
-      if (gh.cover_row[l] == 0 &&
-          gh.cover_column[c] == 0)
+      if (ph.cover_row[l] == 0 &&
+          ph.cover_column[c] == 0)
       {
-        if (!atomicExch((int *)&(gh.cover_row[l]), 1))
+        if (!atomicExch((int *)&(ph.cover_row[l]), 1))
         {
           // only one thread gets the line
-          if (!atomicExch((int *)&(gh.cover_column[c]), 1))
+          if (!atomicExch((int *)&(ph.cover_column[c]), 1))
           {
             // only one thread gets the column
-            gh.row_of_star_at_column[c] = l;
-            gh.column_of_star_at_row[l] = c;
+            ph.row_of_star_at_column[c] = l;
+            ph.column_of_star_at_row[l] = c;
           }
           else
           {
-            gh.cover_row[l] = 0;
-            repeat = true;
-            s_repeat_kernel = true;
+            ph.cover_row[l] = 0;
+            ph.repeat = true;
+            ph.s_repeat_kernel = true;
           }
         }
       }
     }
-    __syncthreads();
-  } while (repeat);
-  if (s_repeat_kernel)
-    sh.repeat_kernel = true;
+    tile.sync();
+  } while (ph.repeat);
+  if (ph.s_repeat_kernel)
+    ph.repeat_kernel = true;
 }
 
-fundef void step_3_init(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // For single block
+fundef void step_3_init(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // For single block
 {
-  for (size_t i = threadIdx.x; i < nrows; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < nrows; i += TileSize)
   {
-    gh.cover_row[i] = 0;
-    gh.cover_column[i] = 0;
+    ph.cover_row[i] = 0;
+    ph.cover_column[i] = 0;
   }
-  if (threadIdx.x == 0)
-    sh.n_matches = 0;
+  if (tile.thread_rank() == 0)
+    ph.n_matches = 0;
 }
 
-fundef void step_3(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // For single block
+fundef void step_3(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // For single block
 {
   // size_t i = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  for (size_t i = threadIdx.x; i < nrows; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < nrows; i += TileSize)
   {
     // printf("i %lu, rosc %d\n", i, gh.row_of_star_at_column[i]);
-    if (gh.row_of_star_at_column[i] >= 0)
+    if (ph.row_of_star_at_column[i] >= 0)
     {
-      gh.cover_column[i] = 1;
-      atomicAdd((int *)&sh.n_matches, 1);
+      ph.cover_column[i] = 1;
+      atomicAdd((int *)&ph.n_matches, 1);
     }
   }
 }
@@ -194,46 +251,45 @@ fundef void step_3(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // For single blo
 // uncovered zeros left. Save the smallest uncovered value and
 // Go to Step 6.
 
-fundef void step_4_init(GLOBAL_HANDLE<data> &gh)
+fundef void step_4_init(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
-  for (size_t i = threadIdx.x; i < SIZE; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < SIZE; i += TileSize)
   {
-    gh.column_of_prime_at_row[i] = -1;
-    gh.row_of_green_at_column[i] = -1;
+    ph.column_of_prime_at_row[i] = -1;
+    ph.row_of_green_at_column[i] = -1;
   }
 }
 
-fundef void step_4(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh)
+fundef void step_4(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
-  const size_t i = threadIdx.x;
-  __shared__ bool s_found;
-  volatile int *v_cover_row = gh.cover_row;
-  volatile int *v_cover_column = gh.cover_column;
+  const size_t i = tile.thread_rank();
+  volatile int *v_cover_row = ph.cover_row;
+  volatile int *v_cover_column = ph.cover_column;
   if (i == 0)
   {
-    sh.goto_5 = false;
-    sh.repeat_kernel = false;
+    ph.goto_5 = false;
+    ph.repeat_kernel = false;
   }
-  __syncthreads();
+  tile.sync();
   do
   {
-    __syncthreads();
+    tile.sync();
     if (i == 0)
-      s_found = false;
-    __syncthreads();
-    for (size_t j = threadIdx.x; j < sh.zeros_size; j += blockDim.x)
+      ph.s_found = false;
+    tile.sync();
+    for (size_t j = tile.thread_rank(); j < ph.zeros_size; j += TileSize)
     {
       // each thread picks a zero!
-      size_t z = gh.zeros[j];
+      size_t z = ph.zeros[j];
       int l = z % nrows; // row
       int c = z / nrows; // column
-      int c1 = gh.column_of_star_at_row[l];
+      int c1 = ph.column_of_star_at_row[l];
       // printf("j %lu, z %lu, l %d, c %d, c1 %d\n", j, z, l, c, c1);
       if (!v_cover_column[c] && !v_cover_row[l])
       {
-        s_found = true; // find uncovered zero
-        sh.repeat_kernel = true;
-        gh.column_of_prime_at_row[l] = c; // prime the uncovered zero
+        ph.s_found = true; // find uncovered zero
+        ph.repeat_kernel = true;
+        ph.column_of_prime_at_row[l] = c; // prime the uncovered zero
 
         if (c1 >= 0)
         {
@@ -243,29 +299,28 @@ fundef void step_4(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh)
         }
         else
         {
-          sh.goto_5 = true;
+          ph.goto_5 = true;
         }
       }
     } // for(int j
-    __syncthreads();
-  } while (s_found && !sh.goto_5);
+    tile.sync();
+  } while (ph.s_found && !ph.goto_5);
 }
 
-template <typename data = int, uint blockSize = n_threads_reduction>
-__forceinline__ __device__ void min_reduce_kernel1(data *g_idata, data *g_odata,
-                                                   const size_t n, GLOBAL_HANDLE<data> &gh)
+fundef void min_reduce_kernel1(cg::thread_block_tile<TileSize> tile, data *g_idata, data *g_odata,
+                               const size_t n, PARTITION_HANDLE<data> &ph)
 {
   data myval = MAX_DATA;
-  size_t i = threadIdx.x;
-  size_t gridSize = (size_t)blockSize * 2;
+  size_t i = tile.thread_rank();
+  size_t gridSize = (size_t)TileSize * 2;
   while (i < n)
   {
     size_t i1 = i;
-    size_t i2 = i + blockSize;
+    size_t i2 = i + TileSize;
     size_t l1 = i1 % nrows; // local index within the row
     size_t c1 = i1 / nrows; // Row number
     data g1 = MAX_DATA, g2 = MAX_DATA;
-    if (gh.cover_row[l1] == 1 || gh.cover_column[c1] == 1)
+    if (ph.cover_row[l1] == 1 || ph.cover_column[c1] == 1)
       g1 = MAX_DATA;
     else
       g1 = g_idata[i1];
@@ -273,7 +328,7 @@ __forceinline__ __device__ void min_reduce_kernel1(data *g_idata, data *g_odata,
     {
       size_t l2 = i2 % nrows;
       size_t c2 = i2 / nrows;
-      if (gh.cover_row[l2] == 1 || gh.cover_column[c2] == 1)
+      if (ph.cover_row[l2] == 1 || ph.cover_column[c2] == 1)
         g2 = MAX_DATA;
       else
         g2 = g_idata[i2];
@@ -281,31 +336,30 @@ __forceinline__ __device__ void min_reduce_kernel1(data *g_idata, data *g_odata,
     myval = min(myval, min(g1, g2));
     i += gridSize;
   }
-  __syncthreads();
-  typedef cub::BlockReduce<data, blockSize> BlockReduce;
-  __shared__ typename BlockReduce::TempStorage temp_storage;
-  data minimum = BlockReduce(temp_storage).Reduce(myval, cub::Min());
-  if (threadIdx.x == 0)
+  tile.sync();
+
+  data minimum = tileReduce(tile, myval, cub::Min());
+  if (tile.thread_rank() == 0)
     *g_odata = minimum;
 }
 
-fundef void step_6_init(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh)
+fundef void step_6_init(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
   // size_t id = (size_t)threadIdx.x + (size_t)blockIdx.x * (size_t)blockDim.x;
-  if (threadIdx.x == 0)
-    sh.zeros_size = 0;
-  for (uint i = threadIdx.x; i < SIZE; i += blockDim.x)
+  if (tile.thread_rank() == 0)
+    ph.zeros_size = 0;
+  for (uint i = tile.thread_rank(); i < SIZE; i += TileSize)
   {
-    if (gh.cover_column[i] == 0)
-      gh.min_in_rows[i] += gh.d_min_in_mat[0] / 2;
+    if (ph.cover_column[i] == 0)
+      ph.min_in_rows[i] += ph.d_min_in_mat[0] / 2;
     else
-      gh.min_in_rows[i] -= gh.d_min_in_mat[0] / 2;
-    if (gh.cover_row[i] == 0)
-      gh.min_in_cols[i] += gh.d_min_in_mat[0] / 2;
+      ph.min_in_rows[i] -= ph.d_min_in_mat[0] / 2;
+    if (ph.cover_row[i] == 0)
+      ph.min_in_cols[i] += ph.d_min_in_mat[0] / 2;
     else
-      gh.min_in_cols[i] -= gh.d_min_in_mat[0] / 2;
+      ph.min_in_cols[i] -= ph.d_min_in_mat[0] / 2;
   }
-  __syncthreads();
+  tile.sync();
 }
 
 /* STEP 5:
@@ -320,80 +374,80 @@ zero of the series, star each primed zero of the series, erase
 all primes and uncover every line in the matrix. Return to Step 3.*/
 
 // Eliminates joining paths
-fundef void step_5a(GLOBAL_HANDLE<data> gh)
+fundef void step_5a(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
   // size_t i = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  for (size_t i = threadIdx.x; i < SIZE; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < SIZE; i += TileSize)
   {
     int r_Z0, c_Z0;
 
-    c_Z0 = gh.column_of_prime_at_row[i];
-    if (c_Z0 >= 0 && gh.column_of_star_at_row[i] < 0) // if primed and not covered
+    c_Z0 = ph.column_of_prime_at_row[i];
+    if (c_Z0 >= 0 && ph.column_of_star_at_row[i] < 0) // if primed and not covered
     {
-      gh.row_of_green_at_column[c_Z0] = i; // mark the column as green
+      ph.row_of_green_at_column[c_Z0] = i; // mark the column as green
 
-      while ((r_Z0 = gh.row_of_star_at_column[c_Z0]) >= 0)
+      while ((r_Z0 = ph.row_of_star_at_column[c_Z0]) >= 0)
       {
-        c_Z0 = gh.column_of_prime_at_row[r_Z0];
-        gh.row_of_green_at_column[c_Z0] = r_Z0;
+        c_Z0 = ph.column_of_prime_at_row[r_Z0];
+        ph.row_of_green_at_column[c_Z0] = r_Z0;
       }
     }
   }
 }
 
 // Applies the alternating paths
-fundef void step_5b(GLOBAL_HANDLE<data> &gh)
+fundef void step_5b(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
   // size_t j = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  for (size_t j = threadIdx.x; j < SIZE; j += blockDim.x)
+  for (size_t j = tile.thread_rank(); j < SIZE; j += TileSize)
   {
     int r_Z0, c_Z0, c_Z2;
 
-    r_Z0 = gh.row_of_green_at_column[j];
+    r_Z0 = ph.row_of_green_at_column[j];
 
-    if (r_Z0 >= 0 && gh.row_of_star_at_column[j] < 0)
+    if (r_Z0 >= 0 && ph.row_of_star_at_column[j] < 0)
     {
 
-      c_Z2 = gh.column_of_star_at_row[r_Z0];
+      c_Z2 = ph.column_of_star_at_row[r_Z0];
 
-      gh.column_of_star_at_row[r_Z0] = j;
-      gh.row_of_star_at_column[j] = r_Z0;
+      ph.column_of_star_at_row[r_Z0] = j;
+      ph.row_of_star_at_column[j] = r_Z0;
 
       while (c_Z2 >= 0)
       {
-        r_Z0 = gh.row_of_green_at_column[c_Z2]; // row of Z2
+        r_Z0 = ph.row_of_green_at_column[c_Z2]; // row of Z2
         c_Z0 = c_Z2;                            // col of Z2
-        c_Z2 = gh.column_of_star_at_row[r_Z0];  // col of Z4
+        c_Z2 = ph.column_of_star_at_row[r_Z0];  // col of Z4
 
         // star Z2
-        gh.column_of_star_at_row[r_Z0] = c_Z0;
-        gh.row_of_star_at_column[c_Z0] = r_Z0;
+        ph.column_of_star_at_row[r_Z0] = c_Z0;
+        ph.row_of_star_at_column[c_Z0] = r_Z0;
       }
     }
   }
 }
 
-fundef void step_6_add_sub_fused_compress_matrix(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh) // For single block
+fundef void step_6_add_sub_fused_compress_matrix(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // For single block
 {
   // STEP 6:
   /*STEP 6: Add the minimum uncovered value to every element of each covered
   row, and subtract it from every element of each uncovered column.
   Return to Step 4 without altering any stars, primes, or covered lines. */
   // const size_t i = (size_t)blockDim.x * (size_t)blockIdx.x + (size_t)threadIdx.x;
-  for (size_t i = threadIdx.x; i < SIZE * SIZE; i += blockDim.x)
+  for (size_t i = tile.thread_rank(); i < SIZE * SIZE; i += TileSize)
   {
     const size_t l = i % nrows;
     const size_t c = i / nrows;
-    auto reg = gh.slack[i];
-    switch (gh.cover_row[l] + gh.cover_column[c])
+    auto reg = ph.slack[i];
+    switch (ph.cover_row[l] + ph.cover_column[c])
     {
     case 2:
-      reg += gh.d_min_in_mat[0];
-      gh.slack[i] = reg;
+      reg += ph.d_min_in_mat[0];
+      ph.slack[i] = reg;
       break;
     case 0:
-      reg -= gh.d_min_in_mat[0];
-      gh.slack[i] = reg;
+      reg -= ph.d_min_in_mat[0];
+      ph.slack[i] = reg;
       break;
     default:
       break;
@@ -402,8 +456,8 @@ fundef void step_6_add_sub_fused_compress_matrix(GLOBAL_HANDLE<data> &gh, SHARED
     // compress matrix
     if (near_zero(reg))
     {
-      int j = atomicAdd(&sh.zeros_size, 1);
-      gh.zeros[j] = i;
+      int j = atomicAdd(&ph.zeros_size, 1);
+      ph.zeros[j] = i;
     }
   }
 }
@@ -490,119 +544,115 @@ fundef void set_handles(TILED_HANDLE<data> &th, GLOBAL_HANDLE<data> &gh, uint &p
   __syncthreads();
 }
 
-template <typename data = int, uint BLOCK_DIM_X>
-__launch_bounds__(BLOCK_DIM_X)
-    __global__ void BHA(GLOBAL_HANDLE<data> gh)
-{
-  __shared__ SHARED_HANDLE sh;
-  BHA(gh, sh);
-}
+// partition handle ph  -- Data in global memory, pointers in shared memory
+// shared handle sh     -- Data in shared memory
+// global handle gh     -- Data in global memory, pointers in register memory
 
-fundef void BHA(GLOBAL_HANDLE<data> &gh, SHARED_HANDLE &sh, const uint problemID = 0)
+fundef void PHA(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph, const uint problemID = 0)
 {
 
-  init(gh);
-  calc_row_min(gh);
-  __syncthreads();
-  row_sub(gh, sh);
-  __syncthreads();
-  calc_col_min(gh);
-  __syncthreads();
-  col_sub(gh);
-  __syncthreads();
-  compress_matrix(gh, sh);
-  __syncthreads();
+  init(tile, ph);
+  calc_row_min(tile, ph);
+  tile.sync();
+  row_sub(tile, ph);
+  tile.sync();
+  calc_col_min(tile, ph);
+  tile.sync();
+  col_sub(tile, ph);
+  tile.sync();
+  compress_matrix(tile, ph);
+  tile.sync();
 
   do
   {
-    __syncthreads();
-    if (threadIdx.x == 0)
-      sh.repeat_kernel = false;
-    __syncthreads();
-    step_2(gh, sh);
-    __syncthreads();
-  } while (sh.repeat_kernel);
-  __syncthreads();
+    tile.sync();
+    if (tile.thread_rank() == 0)
+      ph.repeat_kernel = false;
+    tile.sync();
+    step_2(tile, ph);
+    tile.sync();
+  } while (ph.repeat_kernel);
+  tile.sync();
   while (1)
   {
-    __syncthreads();
-    step_3_init(gh, sh);
-    __syncthreads();
-    step_3(gh, sh);
-    __syncthreads();
-    if (sh.n_matches >= SIZE)
+    tile.sync();
+    step_3_init(tile, ph);
+    tile.sync();
+    step_3(tile, ph);
+    tile.sync();
+    if (ph.n_matches >= SIZE)
       break;
-    step_4_init(gh);
-    __syncthreads();
+    step_4_init(tile, ph);
+    tile.sync();
 
     while (1)
     {
       do
       {
-        __syncthreads();
-        step_4(gh, sh);
-        __syncthreads();
-      } while (sh.repeat_kernel && !sh.goto_5);
-      __syncthreads();
-      if (sh.goto_5)
+        tile.sync();
+        step_4(tile, ph);
+        tile.sync();
+      } while (ph.repeat_kernel && !ph.goto_5);
+      tile.sync();
+      if (ph.goto_5)
         break;
 
-      __syncthreads();
-      min_reduce_kernel1<data, n_threads_reduction>(gh.slack, gh.d_min_in_mat, SIZE * SIZE, gh);
-      __syncthreads();
+      tile.sync();
+      min_reduce_kernel1<data>(tile, ph.slack, ph.d_min_in_mat,
+                               SIZE * SIZE, ph);
+      tile.sync();
 
-      if (gh.d_min_in_mat[0] <= 0)
+      if (ph.d_min_in_mat[0] <= 0)
       {
-        __syncthreads();
-        if (threadIdx.x == 0)
+        tile.sync();
+        if (tile.thread_rank() == 0)
         {
-          printf("minimum element in problemID %u is non positive: %f\n", problemID, (float)gh.d_min_in_mat[0]);
+          printf("minimum element in problemID %u is non positive: %f\n", problemID, (float)ph.d_min_in_mat[0]);
         }
         return;
       }
-      __syncthreads();
+      tile.sync();
 
-      step_6_init(gh, sh); // Also does dual update
-      __syncthreads();
+      step_6_init(tile, ph); // Also does dual update
+      tile.sync();
 
-      step_6_add_sub_fused_compress_matrix(gh, sh);
-      __syncthreads();
+      step_6_add_sub_fused_compress_matrix(tile, ph);
+      tile.sync();
     }
-    __syncthreads();
+    tile.sync();
 
-    step_5a(gh);
-    __syncthreads();
-    step_5b(gh);
-    __syncthreads();
+    step_5a(tile, ph);
+    tile.sync();
+    step_5b(tile, ph);
+    tile.sync();
   }
-  __syncthreads();
-  get_objective(gh);
+  tile.sync();
+  get_objective(tile, ph);
 }
 
-fundef void get_objective(GLOBAL_HANDLE<data> &gh)
+fundef void get_objective(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph)
 {
-  typedef cub::BlockReduce<data, n_threads_reduction> BR;
-  __shared__ typename BR::TempStorage temp_storage;
   data obj = 0;
-  for (uint c = threadIdx.x; c < SIZE; c += blockDim.x)
+  for (uint c = tile.thread_rank(); c < SIZE; c += TileSize)
   {
-    obj += gh.cost[c * SIZE + gh.row_of_star_at_column[c]];
+    obj += ph.cost[c * SIZE + ph.row_of_star_at_column[c]];
     // printf("r: %u, c: %u, obj: %u\n", c, gh.row_of_star_at_column[c], obj);
   }
-  obj = BR(temp_storage).Reduce(obj, cub::Sum());
-  if (threadIdx.x == 0)
-    gh.objective[0] = obj;
+  obj = tileReduce(tile, obj, cub::Sum());
+  if (tile.thread_rank() == 0)
+    ph.objective[0] = obj;
 
-  __syncthreads();
+  tile.sync();
 }
 
-template <typename data, uint BLOCK_DIM_X>
+template <typename data>
 __global__ void THA(TILED_HANDLE<data> th)
 {
   __shared__ GLOBAL_HANDLE<data> gh;
-  __shared__ SHARED_HANDLE sh;
   __shared__ uint problemID;
-  // checkpoint();
+  __shared__ PARTITION_HANDLE<data> ph;
+  cg::thread_block block = cg::this_thread_block();
+  cg::thread_block_tile<TileSize> tile = cg::tiled_partition<TileSize>(block);
   while (1)
   {
     set_handles(th, gh, problemID);
@@ -610,7 +660,54 @@ __global__ void THA(TILED_HANDLE<data> th)
     if (problemID >= NPROB)
       return;
     __syncthreads();
-    BHA<data>(gh, sh, problemID);
+    PHA<data, TileSize>(ph, problemID);
   }
   return;
+}
+
+fundef void set_ph(cg::thread_block_tile<TileSize> tile, GLOBAL_HANDLE<data> &gh, PARTITION_HANDLE<data> &ph)
+{
+  if (tile.thread_rank() == 0)
+  {
+    // get tile ID:
+    uint tileID = tile.meta_group_rank();
+    ph.cost = &gh.cost[(size_t)tileID * SIZE * SIZE];
+    ph.slack = &gh.slack[(size_t)tileID * SIZE * SIZE];
+    ph.min_in_rows = &gh.min_in_rows[tileID * nrows];
+    ph.min_in_cols = &gh.min_in_cols[tileID * ncols];
+    ph.objective = &gh.objective[tileID * 1];
+    ph.zeros = &gh.zeros[(size_t)tileID * SIZE * SIZE];
+    ph.row_of_star_at_column = &gh.row_of_star_at_column[tileID * ncols];
+    ph.column_of_star_at_row = &gh.column_of_star_at_row[tileID * nrows];
+    ph.cover_row = &gh.cover_row[tileID * nrows];
+    ph.cover_column = &gh.cover_column[tileID * ncols];
+    ph.column_of_prime_at_row = &gh.column_of_prime_at_row[tileID * nrows];
+    ph.row_of_green_at_column = &gh.row_of_green_at_column[tileID * ncols];
+    ph.max_in_mat_row = &gh.max_in_mat_row[tileID * nrows];
+    ph.max_in_mat_col = &gh.max_in_mat_col[tileID * ncols];
+    ph.d_min_in_mat = &gh.d_min_in_mat[tileID * 1];
+
+    // set shared handles
+    ph.repeat_kernel = false;
+    ph.goto_5 = false;
+    ph.zeros_size = 0;
+    ph.n_matches = 0;
+  }
+  tile.sync();
+}
+
+template <typename data = int>
+__global__ void BHA(GLOBAL_HANDLE<data> gh)
+{
+  __shared__ PARTITION_HANDLE<data> ph[nthr / TileSize];
+  cg::thread_block block = cg::this_thread_block();
+  cg::thread_block_tile<TileSize> tile = cg::tiled_partition<TileSize>(block);
+  const uint tileID = tile.meta_group_rank();
+  // printf("Thread ID: %u, TileID: %u\n", threadIdx.x, tileID);
+  if (tileID == 0)
+  {
+    // printf("Thread ID: %u\n", threadIdx.x);
+    set_ph(tile, gh, ph[tileID]);
+    PHA<data>(tile, ph[tileID]);
+  }
 }

@@ -69,7 +69,7 @@ public:
     const uint n_threads_full = (uint)min(size_ * size_, (unsigned long)nthr);
     const size_t n_blocks = (size_t)ceil((size_ * 1.0) / nthr);
 
-    execKernel((BHA<data, nthr>), nprob, nthr, dev_, true, gh);
+    execKernel((BHA<data>), nprob, nthr, dev_, true, gh);
   };
 
   bool passes_sanity_test(data *d_min)

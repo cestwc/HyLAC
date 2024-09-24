@@ -6,10 +6,10 @@ BUILD_DIR ?=./build
 OBJ_DIR ?=$(BUILD_DIR)/o
 EXE_DIR ?= $(BUILD_DIR)/exe
 
-SRC_DIRS ?= .
+SRC_DIRS ?= ./src .
 
-SRCS := $(shell find $(SRC_DIRS) -name *.cpp -or -name *.c -or -name *.s -or -name *.cu)
-SRCS_NAMES := $(shell find $(SRC_DIRS) -name *.cpp -or -name *.c -or -name *.s -or -name *.cu -printf "%f\n")
+SRCS := $(shell find $(SRC_DIRS) -maxdepth 1 -name *.cpp -or -name *.c -or -name *.s -or -name *.cu)
+SRCS_NAMES := $(shell find $(SRC_DIRS) -maxdepth 1 -name *.cpp -or -name *.c -or -name *.s -or -name *.cu -printf "%f\n")
 OBJS := $(SRCS:%=$(BUILD_DIR)/obj/%.o)
 EXES := $(SRCS:%=$(BUILD_DIR)/exe/%.exe)
 DEBUG_OBJS := $(SRCS:%=$(BUILD_DIR)/debug_objs/%.o)
@@ -23,7 +23,7 @@ INC_FLAGS := $(addprefix -I,$(INCL_DIRS))
 
 LDFLAGS := -lcuda -lgomp
 CPPFLAGS ?= $(INC_FLAGS) -std=c++11 -O3
-CUDAFLAGS ?= $(INC_FLAGS) -g -Xcompiler -fopenmp -lineinfo -O3 -arch=sm_$(ARCH) -gencode=arch=compute_$(ARCH),code=sm_$(ARCH) -gencode=arch=compute_$(ARCH),code=compute_$(ARCH)
+CUDAFLAGS ?= $(INC_FLAGS) -g -Xcompiler -rdynamic -lineinfo -Xcompiler -fopenmp -std=c++11 -O3 -arch=sm_$(ARCH) -gencode=arch=compute_$(ARCH),code=sm_$(ARCH) -gencode=arch=compute_$(ARCH),code=compute_$(ARCH)
 CUDADEBUGFLAGS ?= $(INC_FLAGS) -w -g -G -Xcompiler -rdynamic -fopenmp -O3 -arch=sm_$(ARCH) -gencode=arch=compute_$(ARCH),code=sm_$(ARCH) -gencode=arch=compute_$(ARCH),code=compute_$(ARCH)
 
 NVCCOPTIONS ?=
