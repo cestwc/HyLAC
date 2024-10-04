@@ -427,7 +427,7 @@ fundef void step_5b(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data>
   }
 }
 
-fundef void step_6_add_sub_fused_compress_matrix(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // For single block
+fundef void step_6_add_sub_fused_compress_matrix(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph) // For single tile
 {
   // STEP 6:
   /*STEP 6: Add the minimum uncovered value to every element of each covered
@@ -598,8 +598,8 @@ fundef void PHA(cg::thread_block_tile<TileSize> tile, PARTITION_HANDLE<data> &ph
         break;
 
       tile.sync();
-      min_reduce_kernel1<data>(tile, ph.slack, ph.d_min_in_mat,
-                               SIZE * SIZE, ph);
+      min_reduce_kernel1(tile, ph.slack, ph.d_min_in_mat,
+                         SIZE * SIZE, ph);
       tile.sync();
 
       if (ph.d_min_in_mat[0] <= 0)
