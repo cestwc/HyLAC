@@ -46,6 +46,14 @@ We also provide the solver at different granularity levels:
 - In each directory, run `make clean all` to compile the code with the makefile provided in that directory. The default architecture version used in each makefile is 80. Change it according to your GPU architecture. \
   Do not know the architecture of your GPU? Check [here](https://developer.nvidia.com/cuda-gpus).
 
+
+### Using HyLAC solver in Python
+
+```
+nvcc -Xcompiler -fPIC -shared -O3 -arch=sm_80     lap_interface.cu src/Hung.cu -o liblap.so
+python lap_wrapper.py
+```
+
 ## Usage
 
 #### Case 1: Solving single LAP (Fine-grained solver) [Hung-Hybrid branch]
