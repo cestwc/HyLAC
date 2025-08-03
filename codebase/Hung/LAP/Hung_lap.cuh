@@ -53,8 +53,8 @@ public:
     // memory allocations
     // CUDA_RUNTIME(cudaMalloc((void **)&gh.cost, size * size * sizeof(data)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.slack, size * size * sizeof(data)));
-    CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_rows, h_nrows * sizeof(data)));
-    CUDA_RUNTIME(cudaMalloc((void **)&gh.min_in_cols, h_ncols * sizeof(data)));
+    CUDA_RUNTIME(cudaMallocManaged((void **)&gh.min_in_rows, h_nrows * sizeof(data)));
+    CUDA_RUNTIME(cudaMallocManaged((void **)&gh.min_in_cols, h_ncols * sizeof(data)));
 
     CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros, h_nrows * h_ncols * sizeof(size_t)));
     CUDA_RUNTIME(cudaMalloc((void **)&gh.zeros_size_b, num_blocks_4 * sizeof(size_t)));

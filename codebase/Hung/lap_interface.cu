@@ -14,13 +14,21 @@ LAPHandle create_lap(uint *h_costs, int user_n, int dev) {
 }
 
 // Solve the LAP and return the assignment as a host array
-void solve_lap_with_result(LAPHandle handle, int *assignment_out, int user_n) {
+void solve_lap_with_result(LAPHandle handle, int *assignment_out, int *min_in_rows, int *min_in_cols, int user_n) {
     LAP<uint> *lap = reinterpret_cast<LAP<uint> *>(handle);
     lap->solve();
 
     // Use passed-in user_n instead of lap->get_size()
     for (int r = 0; r < user_n; ++r) {
         assignment_out[r] = lap->gh.column_of_star_at_row[r];
+    }
+
+    for (int r = 0; r < user_n; ++r) {
+        min_in_rows[r] = lap->gh.min_in_rows[r];
+    }
+
+    for (int r = 0; r < user_n; ++r) {
+        min_in_cols[r] = lap->gh.min_in_cols[r];
     }
 }
 
